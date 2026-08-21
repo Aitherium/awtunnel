@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "awtunnel"
+version = "0.1.0"
+description = "Ingress rule validation that catches scheme mismatches and shadowing — hostname/path rules mapping public names to origins, with conflict detection."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+# No dependencies, deliberately. An ingress validator that cannot be run without
+# installing something is one nobody runs during an incident.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+awtunnel = "awtunnel.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Aitherium/awtunnel"
+Documentation = "https://github.com/Aitherium/awtunnel#readme"
+Repository = "https://github.com/Aitherium/awtunnel.git"
+Issues = "https://github.com/Aitherium/awtunnel/issues"
+
+[tool.setuptools]
+packages = ["awtunnel"]
