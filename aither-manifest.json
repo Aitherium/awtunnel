@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1",
+  "name": "awtunnel",
+  "description": "Reach a service that has no public address.",
+  "url": "https://aitherium.github.io/awtunnel/",
+  "repository": "https://github.com/Aitherium/awtunnel",
+  "kind": "tool",
+  "status": "public",
+  "adopt": "Expose one local port to one remote caller and take it away again.",
+  "pairs_with": [
+    "awnet",
+    "awnode"
+  ],
+  "includes": [],
+  "metrics": {
+    "files": {
+      "value": 14,
+      "as_of": "2026-08-22T08:32:41-07:00"
+    },
+    "tests": {
+      "value": 4,
+      "as_of": "2026-08-22T08:32:41-07:00"
+    }
+  }
+}
