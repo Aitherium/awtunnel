@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
@@ -196,6 +197,17 @@ def validate_rules(rules_data: list[dict[str, Any]]) -> ValidationResult:
     # Check for unresolvable hostnames.
     for idx, rule in enumerate(rules):
         hostname, _ = rule.hostname_and_port()
+        # An IP LITERAL never needs the resolver: '::1' through getaddrinfo
+        # fails on any host with no IPv6 stack (GitHub-hosted runners, plenty
+        # of real machines), which reported a syntactically-valid address as a
+        # typo. Resolution is a check for NAMES; literals are validated by form.
+        try:
+            ipaddress.ip_address(hostname.strip("[]"))
+            is_ip_literal = True
+        except ValueError:
+            is_ip_literal = False  # a NAME -- the resolver below is the check
+        if is_ip_literal:
+            continue
         # Try to resolve. We check both IPv4 and IPv6, and accept either.
         # A port in the hostname is already stripped by hostname_and_port().
         try:
