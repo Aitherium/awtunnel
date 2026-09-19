@@ -115,7 +115,7 @@ class Finding:
         return f"{self.category}: {self.message}"
 
 
-def validate_rules(rules_data: list[dict[str, Any]]) -> ValidationResult:
+def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) -> ValidationResult:
     """Validate a set of ingress rules.
 
     Checks for:
@@ -125,6 +125,9 @@ def validate_rules(rules_data: list[dict[str, Any]]) -> ValidationResult:
 
     Args:
         rules_data: List of rule dicts with keys 'hostname', 'path', 'origin'.
+        resolve: ask the resolver about every origin NAME. False makes this a
+            purely static check -- what CI wants, where fleet names like
+            ``aitheros-veil`` resolve nowhere and would fail every rule.
 
     Returns:
         ValidationResult with ok=True if all validations pass, False otherwise.
@@ -196,6 +199,8 @@ def validate_rules(rules_data: list[dict[str, Any]]) -> ValidationResult:
 
     # Check for unresolvable hostnames.
     for idx, rule in enumerate(rules):
+        if not resolve:
+            break
         hostname, _ = rule.hostname_and_port()
         # An IP LITERAL never needs the resolver: '::1' through getaddrinfo
         # fails on any host with no IPv6 stack (GitHub-hosted runners, plenty

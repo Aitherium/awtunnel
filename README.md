@@ -33,7 +33,23 @@ if not result.ok:
 ```bash
 awtunnel validate rules.yaml    # 0 ok · 1 real problem · 2 could not judge
 awtunnel check   rules.yaml hostname path  # check if a specific route exists
+
+# a real connector file, not the toy shape: service: -> origin:, a rule with no
+# path means "everything on this hostname", connector built-ins are skipped
+awtunnel validate tunnel-routes.yaml --from-cloudflared --no-resolve
+
+# give one local port a public address, and take it away again
+awtunnel up --port 8080            # prints https://<words>.trycloudflare.com, runs until Ctrl-C
+awtunnel up --port 8080 --once     # print the URL, tear it down (a smoke test)
+awtunnel status                    # is the recorded tunnel still alive
+awtunnel down                      # stop it
 ```
+
+`up` needs the `cloudflared` binary (on PATH or in its standard install location) and
+nothing else: a quick tunnel is a temporary URL with no account. `--name N --hostname H`
+runs a named tunnel you have already created with `cloudflared login`. YAML needs no
+PyYAML either -- the reader for the route-file grammar is in the box, and it is checked
+against PyYAML on every real file when PyYAML happens to be present.
 
 ## The bug this package is shaped around
 
