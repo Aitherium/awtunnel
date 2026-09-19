@@ -2,10 +2,9 @@
 awtunnel.connector - expose one local port through a Cloudflare Tunnel
 =======================================================================
 
-Moved here 2026-09-19 from AitherOS/lib/network/AitherTunnel.py (531 lines, zero
-monorepo imports -- the measured extraction target in ecosystem.yaml). The lib
-path is a re-export shim. Stdlib only; `starlette` is imported lazily inside
-create_api_key_middleware and is optional.
+Extracted into this brick 2026-09-19 (531 lines, zero platform imports); the
+platform keeps a thin re-export shim at its old import path. Stdlib only;
+`starlette` is imported lazily inside create_api_key_middleware and is optional.
 
 Gives a service that has no public address one: a quick tunnel (temporary
 trycloudflare.com URL, no account) or a named tunnel (your hostname, needs
