@@ -127,7 +127,7 @@ def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) ->
         rules_data: List of rule dicts with keys 'hostname', 'path', 'origin'.
         resolve: ask the resolver about every origin NAME. False makes this a
             purely static check -- what CI wants, where fleet names like
-            ``aitheros-veil`` resolve nowhere and would fail every rule.
+            ``web-origin`` resolve nowhere and would fail every rule.
 
     Returns:
         ValidationResult with ok=True if all validations pass, False otherwise.

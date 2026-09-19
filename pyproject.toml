@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "awtunnel"
-version = "0.2.0"
+version = "0.2.1"
 description = "Ingress rule validation that catches scheme mismatches and shadowing — hostname/path rules mapping public names to origins, with conflict detection."
 readme = "README.md"
 requires-python = ">=3.10"

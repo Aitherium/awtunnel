@@ -10,4 +10,4 @@ from .connector import AitherTunnel, TunnelConfig, TunnelStatus
 from .rules import Finding, Rule, validate_rules
 
 __all__ = ["Rule", "Finding", "validate_rules", "AitherTunnel", "TunnelConfig", "TunnelStatus"]
-__version__ = "0.2.0"
+__version__ = "0.2.1"

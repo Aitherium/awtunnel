@@ -12,15 +12,15 @@ ROUTES = """\
 routes:
   - hostname: mcp.aitherium.com
     path: ^/api/v1/chat/hosted
-    service: https://aitheros-genesis:8001
+    service: https://api-origin:8001
     noTLSVerify: true
   - hostname: mcp.aitherium.com
-    service: http://aitheros-mcpgateway:8182
+    service: http://mcp-origin:8182
     description: "the gateway"   # trailing comment after a quoted scalar
   - hostname: gobbonet.aitherium.com
     service: http_status:404
   - hostname: '*.aitherium.com'
-    service: http://aitheros-veil:3000
+    service: http://web-origin:3000
 catchall:
   service: http_status:404
 """
@@ -54,11 +54,11 @@ def test_bare_hostname_above_its_carve_out_is_SHADOWED(tmp_path):
     # hosted-chat floor would never be reached
     swapped = ROUTES.replace(
         "  - hostname: mcp.aitherium.com\n    path: ^/api/v1/chat/hosted\n"
-        "    service: https://aitheros-genesis:8001\n    noTLSVerify: true\n", "")
+        "    service: https://api-origin:8001\n    noTLSVerify: true\n", "")
     swapped = swapped.replace(
         "  - hostname: gobbonet.aitherium.com\n",
         "  - hostname: mcp.aitherium.com\n    path: ^/api/v1/chat/hosted\n"
-        "    service: https://aitheros-genesis:8001\n  - hostname: gobbonet.aitherium.com\n")
+        "    service: https://api-origin:8001\n  - hostname: gobbonet.aitherium.com\n")
     f = tmp_path / "swapped.yaml"
     f.write_text(swapped, encoding="utf-8")
     rules = load_rules(str(f), cloudflared=True)
@@ -72,8 +72,8 @@ def test_same_host_port_two_schemes_is_a_conflict(tmp_path):
     f = tmp_path / "conflict.yaml"
     f.write_text(
         "ingress:\n"
-        "- hostname: a.example\n  service: http://aitheros-security-core:8115\n"
-        "- hostname: b.example\n  service: https://aitheros-security-core:8115\n"
+        "- hostname: a.example\n  service: http://idp-origin:8115\n"
+        "- hostname: b.example\n  service: https://idp-origin:8115\n"
         "- service: http_status:404\n", encoding="utf-8")
     rules = load_rules(str(f), cloudflared=True)
     result = validate_rules(rules, resolve=False)

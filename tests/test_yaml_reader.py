@@ -14,10 +14,10 @@ from awtunnel import _yaml
 DOC = """\
 # header comment
 tunnel:
-  name: aitheros-demo
+  name: demo
 routes:
   - hostname: blog.example
-    service: http://aitheros-veil:3000
+    service: http://web-origin:3000
     critical: true
     access:
       required: false  # a trailing comment used to make this the STRING "false"
@@ -44,7 +44,7 @@ count: 42
 
 def test_reads_the_route_grammar_exactly():
     d = _yaml._load_stdlib(DOC)
-    assert d["tunnel"] == {"name": "aitheros-demo"}
+    assert d["tunnel"] == {"name": "demo"}
     r0, r1 = d["routes"]
     assert r0["critical"] is True
     assert r0["access"]["required"] is False
