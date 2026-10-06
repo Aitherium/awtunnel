@@ -1,0 +1,34 @@
+# awtunnel
+
+> Reach a service that has no public address.
+
+Everything an agent runs is behind NAT on somebody's laptop, and every workaround (a port forward, a public IP, a broker somebody maintains) becomes permanent.
+
+## Install
+
+```
+pip install awtunnel
+```
+
+## In Claude Code
+
+- skill: `/awtunnel`
+
+## Use it in 30 seconds
+
+Expose one local port to one remote caller and take it away again.
+
+## Composes with
+
+- [awnet](https://aitherium.github.io/awnet/) — The agentic web — agents host a mesh, and agents join one.
+- [awnode](https://aitherium.github.io/awnode/) — A lightweight local gateway — bridges your apps to the AI backends you chose.
+
+## Where it lives
+
+- Repo: https://github.com/Aitherium/awtunnel
+- Docs: https://aitherium.github.io/awtunnel/
+- Manifest (keys + the one-line adoption story): https://aitherium.github.io/awtunnel/aither-manifest.json
+
+This repository is mirrored from the AitherOS monorepo by `.github/workflows/sync-awtunnel.yml`; hand edits made here are overwritten on the next sync — change the source instead.
+
+Everything Aitherium, in one file for agents: https://aitherium.com/llms.txt
