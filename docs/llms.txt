@@ -10,10 +10,6 @@ Everything an agent runs is behind NAT on somebody's laptop, and every workaroun
 pip install awtunnel
 ```
 
-## In Claude Code
-
-- skill: `/awtunnel`
-
 ## Use it in 30 seconds
 
 Expose one local port to one remote caller and take it away again.
