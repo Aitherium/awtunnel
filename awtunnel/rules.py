@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
+
+_LITERAL_PREFIX_RE = re.compile(r"\^/[A-Za-z0-9_./-]*")
 
 
 class Rule(NamedTuple):
@@ -133,7 +136,7 @@ def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) ->
         ValidationResult with ok=True if all validations pass, False otherwise.
     """
     findings: list[Finding] = []
-    rules: list[Rule] = []
+    parsed_rules: list[tuple[int, Rule]] = []
 
     # Parse rules and check for format errors.
     for idx, rule_dict in enumerate(rules_data):
@@ -146,12 +149,9 @@ def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) ->
             continue
 
         try:
-            rule = Rule(
-                hostname=rule_dict["hostname"],
-                path=rule_dict["path"],
-                origin=rule_dict["origin"],
-            )
-            rules.append(rule)
+            hostname = rule_dict["hostname"]
+            path = rule_dict["path"]
+            origin = rule_dict["origin"]
         except KeyError as e:
             findings.append(Finding(
                 category="MISSING_FIELD",
@@ -159,17 +159,28 @@ def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) ->
                 rule_index=idx,
             ))
             continue
-        except (ValueError, TypeError) as e:
+
+        invalid_fields: list[str] = []
+        for field_name, field_val in (("hostname", hostname), ("path", path), ("origin", origin)):
+            if not isinstance(field_val, str) or (
+                field_name in ("hostname", "path") and not field_val.strip()
+            ):
+                invalid_fields.append(f"{field_name} must be a non-empty string")
+        if invalid_fields:
             findings.append(Finding(
                 category="INVALID_FIELD",
-                message=str(e),
+                message="; ".join(invalid_fields),
                 rule_index=idx,
             ))
             continue
 
+        parsed_rules.append((idx, Rule(hostname=hostname, path=path, origin=origin)))
+
     # Check for scheme conflicts: same (hostname, port) with different schemes.
+    # Rules failing PARSE_ERROR are excluded from downstream resolution & shadowing.
+    valid_rules: list[tuple[int, Rule]] = []
     scheme_port_pairs: dict[tuple[str, str, str], int] = {}
-    for idx, rule in enumerate(rules):
+    for idx, rule in parsed_rules:
         try:
             hostname, port = rule.hostname_and_port()
             scheme, _ = rule.scheme_and_port()
@@ -181,6 +192,7 @@ def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) ->
             ))
             continue
 
+        valid_rules.append((idx, rule))
         key = (hostname, port, scheme)
         if (hostname, port) in {(h, p) for h, p, s in scheme_port_pairs.keys()}:
             # Find the conflicting rule.
@@ -198,7 +210,7 @@ def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) ->
         scheme_port_pairs[key] = idx
 
     # Check for unresolvable hostnames.
-    for idx, rule in enumerate(rules):
+    for idx, rule in valid_rules:
         if not resolve:
             break
         hostname, _ = rule.hostname_and_port()
@@ -226,31 +238,151 @@ def validate_rules(rules_data: list[dict[str, Any]], *, resolve: bool = True) ->
             ))
 
     # Check for shadowing: a rule that is hidden by an earlier, broader rule.
-    for idx, rule in enumerate(rules):
-        # A rule is shadowed if any earlier rule has the same hostname AND
-        # a path pattern that would match this rule's paths.
-        # Simple heuristic: if paths are identical, or if earlier path is "^/"
-        # (which matches everything), then shadowing occurs.
-        for prev_idx in range(idx):
-            prev_rule = rules[prev_idx]
-            if prev_rule.hostname == rule.hostname:
-                # Check if paths would cause shadowing
-                is_shadowed = False
-                if prev_rule.path == rule.path:
-                    # Identical paths: definitely shadowing
-                    is_shadowed = True
-                elif prev_rule.path == "^/":
-                    # Root pattern matches everything: shadowing
-                    is_shadowed = True
-
-                if is_shadowed:
-                    findings.append(Finding(
-                        category="SHADOWED",
-                        message=f"rule {idx} with path {rule.path!r} is shadowed by "
-                                f"rule {prev_idx} with path {prev_rule.path!r} "
-                                f"(same hostname '{rule.hostname}')",
-                        rule_index=idx,
-                        conflicting_rule_index=prev_idx,
-                    ))
+    for pos, (idx, rule) in enumerate(valid_rules):
+        for prev_idx, prev_rule in valid_rules[:pos]:
+            if _hostname_shadows(prev_rule.hostname, rule.hostname) and _pattern_shadows(prev_rule.path, rule.path):
+                if (
+                    _normalize_host(prev_rule.hostname) == _normalize_host(rule.hostname)
+                    and not prev_rule.hostname.strip().startswith("*.")
+                ):
+                    msg = (
+                        f"rule {idx} with path {rule.path!r} is shadowed by "
+                        f"rule {prev_idx} with path {prev_rule.path!r} "
+                        f"(same hostname '{rule.hostname}')"
+                    )
+                else:
+                    msg = (
+                        f"rule {idx} ({rule.hostname} {rule.path!r}) is shadowed by "
+                        f"wildcard rule {prev_idx} ({prev_rule.hostname} {prev_rule.path!r})"
+                    )
+                findings.append(Finding(
+                    category="SHADOWED",
+                    message=msg,
+                    rule_index=idx,
+                    conflicting_rule_index=prev_idx,
+                ))
 
     return ValidationResult(ok=len(findings) == 0, findings=findings)
+
+
+def _normalize_host(host: str) -> str:
+    return host.strip().lower().rstrip(".")
+
+
+def _hostname_shadows(prev_host: str, curr_host: str) -> bool:
+    """Return True if ``prev_host`` covers ``curr_host`` (exact or single-label ``*.domain``)."""
+    prev = _normalize_host(prev_host)
+    curr = _normalize_host(curr_host)
+    if not prev or not curr:
+        return False
+    if prev == curr:
+        return True
+    if prev.startswith("*.") and curr != prev:
+        suffix = prev[1:]
+        if curr.endswith(suffix):
+            label = curr[: -len(suffix)]
+            return bool(label) and "." not in label
+    return False
+
+
+def _has_top_level_alternation(pattern: str) -> bool:
+    """Return True if ``pattern`` has an unescaped ``|`` at parenthesis depth 0."""
+    depth = 0
+    in_char_class = False
+    escaped = False
+    for ch in pattern:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if in_char_class:
+            if ch == "]":
+                in_char_class = False
+            continue
+        if ch == "[":
+            in_char_class = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif ch == "|" and depth == 0:
+            return True
+    return False
+
+
+def _pattern_shadows(prev_path: str, curr_path: str) -> bool:
+    """Return True if ``prev_path`` matches everything ``curr_path`` matches.
+
+    Literal prefix shadowing is intentionally segment-bounded (for example,
+    ``^/r`` shadows ``^/r/sub``, ``^/r$``, and ``^/r(...)`` but does not
+    shadow sibling path segments like ``^/root``), and skips literal-prefix
+    inference when ``curr_path`` uses top-level ``|`` alternation or makes a
+    trailing boundary slash optional (e.g. ``^/r/?$`` under ``^/r/``).
+    """
+    if prev_path == curr_path:
+        return True
+    if prev_path in ("^/", "^/.*", ".*", "/"):
+        return True
+    if _has_top_level_alternation(curr_path):
+        return False
+    if _LITERAL_PREFIX_RE.fullmatch(prev_path) and curr_path.startswith("^/"):
+        p_lit = prev_path[1:]
+        c_lit = curr_path[1:]
+        if p_lit.endswith("/"):
+            if not c_lit.startswith(p_lit):
+                return False
+            rest = c_lit[len(p_lit) :]
+            if rest[:1] in ("?", "*") or rest.startswith("{0,"):
+                return False
+            return True
+        return (
+            c_lit == p_lit
+            or c_lit.startswith(p_lit + "/")
+            or c_lit.startswith(p_lit + "$")
+            or c_lit.startswith(p_lit + "(")
+        )
+    return False
+
+
+def match_route(
+    rules_data: list[dict[str, Any]],
+    hostname: str,
+    path: str,
+) -> tuple[int, dict[str, Any]] | None:
+    """Resolve the first matching rule for ``(hostname, path)`` (first-match-wins).
+
+    When ``path`` starts with ``"^"``, matches exact pattern equality against
+    each rule's ``path`` (preserving pattern-lookup mode). Otherwise treats
+    ``path`` as a concrete request path (e.g. ``/r/devbox-1``) and matches
+    ``^/`` or ``re.search(rule_path, path)``.
+    """
+    if not isinstance(hostname, str) or not isinstance(path, str):
+        return None
+    target_host = _normalize_host(hostname)
+    pattern_mode = path.startswith("^")
+    for idx, rule_dict in enumerate(rules_data):
+        if not isinstance(rule_dict, dict):
+            continue
+        raw_host = rule_dict.get("hostname")
+        if not isinstance(raw_host, str):
+            continue
+        rule_host = _normalize_host(raw_host)
+        if not rule_host or not _hostname_shadows(rule_host, target_host):
+            continue
+        raw_path = rule_dict.get("path")
+        rule_path = raw_path if isinstance(raw_path, str) and raw_path else "^/"
+        if pattern_mode:
+            if rule_path == path:
+                return (idx, rule_dict)
+            continue
+        if rule_path == "^/":
+            return (idx, rule_dict)
+        try:
+            if re.search(rule_path, path) is not None:
+                return (idx, rule_dict)
+        except re.error:
+            if rule_path == path or path.startswith(rule_path):
+                return (idx, rule_dict)
+    return None

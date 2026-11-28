@@ -1,11 +1,12 @@
 """awtunnel CLI — validate ingress rules, and give one local port a public address.
 
     awtunnel validate RULES [--from-cloudflared] [--no-resolve] [--json]
-    awtunnel check RULES HOSTNAME PATH
+    awtunnel check RULES HOSTNAME PATH [--from-cloudflared] [--json]
     awtunnel up --port 8150 [--host localhost] [--protocol http] [--name N --hostname H]
     awtunnel expose ...            (alias of up)
-    awtunnel status
+    awtunnel status [--json]
     awtunnel down
+    awtunnel rc [status [--json] | off | --name SLUG]
 
 Exit codes: 0 ok, 1 validation failed / nothing to act on, 2 could not judge
 (bad file, no cloudflared, tunnel never came up).
@@ -25,7 +26,9 @@ import time
 from pathlib import Path
 
 from . import _yaml
-from .rules import validate_rules
+from ._seal import verify_rules_seal
+from .rc_bridge import cmd_rc, discover_rc
+from .rules import match_route, validate_rules
 
 #: cloudflared's own built-in services -- rules that route to the CONNECTOR, not
 #: to an origin, so they carry no scheme/port to validate.
@@ -114,9 +117,19 @@ def load_rules(path: str, *, cloudflared: bool = False) -> list[dict]:
 # ── the verbs the registry promised ─────────────────────────────────────────
 def _read_state() -> dict | None:
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    return data if isinstance(data, dict) else None
+
+
+def _coerce_pid(val: object) -> int:
+    if isinstance(val, bool) or val is None:
+        return 0
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _clear_state() -> None:
@@ -175,6 +188,11 @@ def cmd_up(args) -> int:
             "started": time.time(),
         }), encoding="utf-8")
         print(url, flush=True)
+        print(
+            "tip: for authenticated session control use 'adk rc' "
+            "(https://a30.link/r/<id>)",
+            file=sys.stderr,
+        )
         if args.once:
             await tunnel.stop()
             return 0
@@ -194,13 +212,31 @@ def cmd_up(args) -> int:
         return 0
 
 
-def cmd_status(_args) -> int:
+def cmd_status(args) -> int:
     st = _read_state()
+    rc_info = discover_rc(pid_alive=_pid_alive)
+    as_json = bool(getattr(args, "json", False))
     if not st:
-        print("no tunnel recorded")
+        if rc_info["active"]:
+            if as_json:
+                print(json.dumps({"alive": True, **rc_info, "remote_control": rc_info}, indent=2))
+            else:
+                print(f"remote control active ({rc_info['reach']})")
+                if rc_info.get("rc_url"):
+                    print(f"  rc_url:  {rc_info['rc_url']}")
+                if rc_info.get("app_url"):
+                    print(f"  app_url: {rc_info['app_url']}")
+            return 0
+        if as_json:
+            print(json.dumps({"alive": False, "remote_control": rc_info}, indent=2))
+        else:
+            print("no tunnel recorded")
         return 1
-    alive = _pid_alive(int(st.get("pid") or 0))
-    print(json.dumps({**st, "alive": alive}, indent=2))
+    alive = _pid_alive(_coerce_pid(st.get("pid")))
+    payload = {**st, "alive": alive}
+    if rc_info["active"]:
+        payload["remote_control"] = rc_info
+    print(json.dumps(payload, indent=2))
     return 0 if alive else 1
 
 
@@ -211,7 +247,7 @@ def cmd_down(_args) -> int:
         return 1
     stopped = False
     for key in ("cloudflared_pid", "pid"):
-        pid = int(st.get(key) or 0)
+        pid = _coerce_pid(st.get(key))
         if pid and pid != os.getpid() and _pid_alive(pid):
             try:
                 if sys.platform == "win32":
@@ -245,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         _sv = locals().get("argv")
         if _aw_state.cli_banner(_sv if _sv is not None else __import__("sys").argv[1:]):
             return 0
+    _raw_argv = argv if argv is not None else sys.argv[1:]
+    if _raw_argv[:1] == ["rc"]:
+        return cmd_rc(_raw_argv[1:])
     ap = argparse.ArgumentParser(
         prog="awtunnel",
         description=__doc__,
@@ -260,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
                         "(service: -> origin:, no path -> ^/, built-ins dropped)")
     v.add_argument("--no-resolve", action="store_true",
                    help="static only: do not ask the resolver about origin names")
+    v.add_argument("--expect-key", default="",
+                   help="require Ed25519 awseal verification against this public key hex")
 
     for verb in ("up", "expose"):
         u = sub.add_parser(verb, help="give one local port a public address")
@@ -270,14 +311,25 @@ def main(argv: list[str] | None = None) -> int:
         u.add_argument("--hostname", default=None, help="custom hostname for a named tunnel")
         u.add_argument("--once", action="store_true",
                        help="print the URL and take the tunnel down again (a smoke test)")
-    sub.add_parser("status", help="is the tunnel `up` recorded still alive")
+    st = sub.add_parser("status", help="is the tunnel `up` recorded still alive")
+    st.add_argument("--json", action="store_true", help="output status as JSON")
     sub.add_parser("down", help="take the recorded tunnel away again")
+    sub.add_parser(
+        "rc",
+        help="authenticated remote control via adk rc (a30.link/r/<id>, alias tunnel.aitherium.com/r/<id>)",
+    )
 
     # check subcommand
     c = sub.add_parser("check", help="check if a route exists")
     c.add_argument("rules", help="path to rules file")
     c.add_argument("hostname", help="hostname to match")
-    c.add_argument("path", help="path pattern to match")
+    c.add_argument("path", help="path pattern or request path to match")
+    c.add_argument("--from-cloudflared", action="store_true",
+                   help="the file is a tunnel-routes.yaml / cloudflared config "
+                        "(service: -> origin:, no path -> ^/, built-ins dropped)")
+    c.add_argument("--json", action="store_true", help="output match as JSON")
+    c.add_argument("--expect-key", default="",
+                   help="require Ed25519 awseal verification against this public key hex")
 
     args = ap.parse_args(argv)
 
@@ -292,6 +344,21 @@ def main(argv: list[str] | None = None) -> int:
         if not Path(args.rules).is_file():
             print(f"DEAD: no such rules file: {args.rules}", file=sys.stderr)
             return 2
+
+        seal_rc, seal_msg = verify_rules_seal(
+            Path(args.rules), expect_key=getattr(args, "expect_key", ""),
+        )
+        if seal_rc != 0:
+            if args.json:
+                print(json.dumps({
+                    "ok": False,
+                    "seal_ok": False,
+                    "seal_error": seal_msg,
+                }, indent=2))
+            else:
+                prefix = "DEAD" if seal_rc == 2 else "SEAL_FAILED"
+                print(f"{prefix}: {seal_msg}", file=sys.stderr)
+            return seal_rc
 
         rules = load_rules(args.rules, cloudflared=args.from_cloudflared)
         if not rules:
@@ -326,22 +393,49 @@ def main(argv: list[str] | None = None) -> int:
             print(f"DEAD: no such rules file: {args.rules}", file=sys.stderr)
             return 2
 
-        rules = load_rules(args.rules)
+        seal_rc, seal_msg = verify_rules_seal(
+            Path(args.rules), expect_key=getattr(args, "expect_key", ""),
+        )
+        if seal_rc != 0:
+            if args.json:
+                print(json.dumps({
+                    "matched": False,
+                    "seal_ok": False,
+                    "seal_error": seal_msg,
+                    "hostname": args.hostname,
+                    "path": args.path,
+                }, indent=2))
+            else:
+                prefix = "DEAD" if seal_rc == 2 else "SEAL_FAILED"
+                print(f"{prefix}: {seal_msg}", file=sys.stderr)
+            return seal_rc
+
+        rules = load_rules(args.rules, cloudflared=args.from_cloudflared)
         if not rules:
             return 2
 
-        # Find matching rules.
-        matches = []
-        for idx, rule_dict in enumerate(rules):
-            if rule_dict.get("hostname") == args.hostname and \
-               rule_dict.get("path") == args.path:
-                matches.append((idx, rule_dict))
-
-        if not matches:
-            print(f"not found: no rule for {args.hostname} {args.path}")
+        match = match_route(rules, args.hostname, args.path)
+        if not match:
+            if args.json:
+                print(json.dumps({
+                    "matched": False,
+                    "hostname": args.hostname,
+                    "path": args.path,
+                }, indent=2))
+            else:
+                print(f"not found: no rule for {args.hostname} {args.path}")
             return 1
 
-        for idx, rule in matches:
+        idx, rule = match
+        if args.json:
+            print(json.dumps({
+                "matched": True,
+                "rule_index": idx,
+                "hostname": rule.get("hostname"),
+                "path": rule.get("path"),
+                "origin": rule.get("origin"),
+            }, indent=2))
+        else:
             print(f"rule {idx}: {rule.get('origin', 'no origin')}")
 
         return 0
